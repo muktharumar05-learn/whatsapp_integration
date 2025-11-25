@@ -5,7 +5,7 @@ model:
     # Model options: "gpt-oss-20b", "llama-3.1-70b-versatile", etc.
     model_name: "openai/gpt-oss-20b"
     # model_name: "llama-3.3-70b-versatile"
-    api_key_env: "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"
+    api_key_env: "GROQ_API_KEY"
     temperature: 0.7
     max_tokens: 1000
     # Groq API endpoint
