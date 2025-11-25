@@ -1,0 +1,7 @@
+TO EXECUTE ME:
+
+UPDATE YOUR GROQ API KEY IN CONFIG.YAML 
+
+OPEN A TERMINAL AND RUN: uvicorn whatsapp:app --reload
+
+OPEN ANOTHER TERMINAL AND RUN: streamlit run chat_ui.py

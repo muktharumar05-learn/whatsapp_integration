@@ -1,66 +1,57 @@
-from fastapi import FastAPI
-import requests
-import yaml
+from fastapi import FastAPI, HTTPException, Query
+from pydantic import BaseModel
+from typing import Optional, Annotated, Sequence, TypedDict
+from uuid import uuid4
+from langchain_core.messages import SystemMessage, AIMessage, HumanMessage, BaseMessage
+from langgraph.graph.message import add_messages
+from lead_agent import agent  # Your existing agent
 
 app = FastAPI()
 
-with open("config.yaml", 'r') as file:
-    config = yaml.safe_load(file)
-    TOKEN = config['TOKEN']
-    PHONE_NUMBER_ID = config['PHONE_NUMBER_ID']
+# Conversation state model
+class LeadState(TypedDict):
+    messages: Annotated[Sequence[BaseMessage], add_messages]
 
-BASE_URL = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
-HEADERS = {
-    "Authorization": f"Bearer " + TOKEN,
-    "Content-Type": "application/json"
-}
+# Request and response schemas
+class ChatRequest(BaseModel):
+    session_id: Optional[str] = None
+    user_message: str
 
-def send_whatsapp_message(payload):
-    return requests.post(BASE_URL, json=payload, headers=HEADERS).json()
+class ChatResponse(BaseModel):
+    session_id: str
+    ai_reply: str
 
+# In-memory conversation store
+conversations: dict[str, LeadState] = {}
 
-@app.post("/send/text")
-def send_text_api(to: str, message: str):
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "text",
-        "text": {"body": message}
-    }
-    return send_whatsapp_message(payload)
+@app.post("/chat", response_model=ChatResponse)
+def chat(req: ChatRequest):
+    session_id = req.session_id or str(uuid4())
+    if session_id not in conversations:
+        conversations[session_id] = {"messages": []}
+    state = conversations[session_id]
 
+    # Append user message
+    state["messages"].append(HumanMessage(content=req.user_message))
 
-@app.post("/send/image")
-def send_image_api(to: str, url: str):
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "image",
-        "image": {"link": url}
-    }
-    return send_whatsapp_message(payload)
+    # Run agent
+    result = agent.invoke(state)
+    ai_reply = result["messages"][-1].content
 
+    # Append AI response
+    state["messages"].append(AIMessage(content=ai_reply))
+    conversations[session_id] = state
 
-@app.post("/send/document")
-def send_doc_api(to: str, url: str, filename: str = "file.pdf"):
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "document",
-        "document": {"link": url, "filename": filename}
-    }
-    return send_whatsapp_message(payload)
+    return ChatResponse(session_id=session_id, ai_reply=ai_reply)
 
+@app.get("/chat", response_model=ChatResponse)
+def get_last_ai_response(session_id: str = Query(...)):
+    if session_id not in conversations or not conversations[session_id]["messages"]:
+        raise HTTPException(status_code=404, detail="Session not found or no messages yet")
 
-@app.post("/send/template")
-def send_template_api(to: str, template: str):
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "template",
-        "template": {
-            "name": template,
-            "language": {"code": "en_US"}
-        }
-    }
-    return send_whatsapp_message(payload)
+    messages = conversations[session_id]["messages"]
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage):
+            return ChatResponse(session_id=session_id, ai_reply=msg.content)
+
+    raise HTTPException(status_code=404, detail="No AI response found yet in this session")
