@@ -1,0 +1,16 @@
+PyYAML
+requests
+fastapi
+langchain
+langgraph
+uvicorn
+twilio
+psycopg2-binary
+orjson
+langchain_groq
+redis
+python-dotenv
+databases[asyncpg]
+pydantic
+langgraph-checkpoint-redis
+python-multipart

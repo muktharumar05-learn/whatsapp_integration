@@ -1,0 +1,15 @@
+{
+    "cSpell.words": [
+        "ainvoke",
+        "aput",
+        "checkpointer",
+        "dotenv",
+        "groq",
+        "leadstate",
+        "libpq",
+        "psycopg",
+        "TIMESTAMPTZ",
+        "Uvicorn",
+        "yourdbname"
+    ]
+}

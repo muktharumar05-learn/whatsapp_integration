@@ -1,0 +1,16 @@
+services:
+  whatsapp-app:
+    build: .
+    container_name: whatsapp-app
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis-server
+
+  redis-server:
+    image: redis:7.2
+    container_name: redis-server
+    ports:
+      - "6379:6379"

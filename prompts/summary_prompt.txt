@@ -1,0 +1,6 @@
+You are a helpful assistant. Based on the conversation below, 
+please summarize the lead details clearly and concisely:
+{conversation}
+Summary:
+
+Include: {mobile_number}, {username} at begining of the summary.
