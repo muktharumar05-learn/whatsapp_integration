@@ -1,6 +1,7 @@
 You are a helpful assistant. Based on the conversation below, 
-please summarize the lead details clearly and concisely:
-{conversation}
-Summary:
+please summarize the lead's intent, interest level, and key details:
 
-Include: {mobile_number}, {username} at begining of the summary.
+{conversation}
+
+Summary for {username} ({user_mobile_number}):
+(Describe what they want and how they feel about it)

@@ -1,16 +1,29 @@
 services:
-  whatsapp-app:
+  whatsapp.agent:
     build: .
-    container_name: whatsapp-app
+    container_name: whatsapp.agent
     env_file:
       - .env
     ports:
       - "8000:8000"
     depends_on:
-      - redis-server
+      - postgres
+    volumes:
+      - ./scrape/scraped_pages:/app/scrape/scraped_pages   
+      - ./chroma:/app/chroma                               
 
-  redis-server:
-    image: redis:7.2
-    container_name: redis-server
+  postgres:
+    image: postgres:16
+    container_name: local-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: myuser
+      POSTGRES_PASSWORD: mypassword
+      POSTGRES_DB: mydb
     ports:
-      - "6379:6379"
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+volumes:
+  postgres-data:

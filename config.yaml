@@ -10,3 +10,28 @@ Credentials:
     TWILIO_ACCOUNT_SID: "TWILIO_ACCOUNT_SID_KEY"
     TWILIO_AUTH_TOKEN: "TWILIO_AUTH_TOKEN_KEY"
     TWILIO_WHATSAPP_NUMBER: "TWILIO_WHATSAPP_NUMBER_KEY"
+
+model:
+  groq:
+    model_name: "openai/gpt-oss-20b"
+    api_key_env: "GROQ_API_KEY"
+    temperature: 0.7
+    max_tokens: 1000
+  
+Credentials:
+  Twilio:
+    TWILIO_ACCOUNT_SID: "TWILIO_ACCOUNT_SID_KEY"
+    TWILIO_AUTH_TOKEN: "TWILIO_AUTH_TOKEN_KEY"
+    TWILIO_WHATSAPP_NUMBER: "TWILIO_WHATSAPP_NUMBER_KEY"
+
+vectorstore:
+  type: "chroma"
+  persist_directory: "./chroma_db"
+
+embeddings:
+  provider: "chromadb"
+  HuggingFaceEmbeddings:
+    model_name: "all-MiniLM-L6-v2"
+
+document_loader:
+  directory: "/app/scrape/scraped_pages/"

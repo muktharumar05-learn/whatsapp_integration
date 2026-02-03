@@ -1,176 +1,279 @@
-import os
-import uuid
+from fastapi.templating import Jinja2Templates
 import logging
 import asyncio
-from datetime import datetime, timezone, timedelta
+from fastapi import (
+    FastAPI,
+    Form,
 
-from fastapi import FastAPI, Form, HTTPException
-from fastapi.responses import PlainTextResponse
+    Request,
+    BackgroundTasks,
+    status,
+)
+from fastapi.responses import (
+    HTMLResponse,
+    PlainTextResponse,
+    RedirectResponse,
+)
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.sessions import SessionMiddleware
 from twilio.twiml.messaging_response import MessagingResponse
+from langchain_core.messages import HumanMessage, AIMessage
+from agent.react_agent import agent, monitor_active_leads
+from client.twilio_client import TWILIO_WHATSAPP_NUMBER
+from contextlib import asynccontextmanager
+from database.initdb import init_pool, init_db, close_pool
+from service.dashboard import load_template_and_inject_rows
+from database.retrieve_data import fetch_all_leads
+from service.signup import register_new_customer
+from service.leads import LeadService
+from service.signin import authenticate_user, login_required
 
-from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
-from agent.react_agent import agent, summarize_conversation, save_to_db_and_clear_cache
-from storage.cache import hybrid_session_store
 
-app = FastAPI()
+# -------------------------------------------------
+# Logging
+# -------------------------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
 
-# --- Serialization Helpers ---
+templates = Jinja2Templates(directory="html_templates")
 
-def serialize_messages(messages: list[BaseMessage]) -> list[dict]:
-    serialized = []
-    for msg in messages:
-        try:
-            msg_dict = msg.dict() if hasattr(msg, "dict") else dict(msg)
-            if isinstance(msg, HumanMessage):
-                msg_dict["type"] = "human"
-            elif isinstance(msg, AIMessage):
-                msg_dict["type"] = "ai"
-            else:
-                msg_dict["type"] = "base"
-            serialized.append(msg_dict)
-        except Exception as e:
-            logging.error(f"Error serializing message {msg}: {e}")
-    return serialized
 
-def deserialize_messages(messages_list: list[dict]) -> list[BaseMessage]:
-    deserialized = []
-    for msg_dict in messages_list:
-        try:
-            msg_type = msg_dict.get("type")
-            if msg_type == "human":
-                deserialized.append(HumanMessage(**msg_dict))
-            elif msg_type == "ai":
-                deserialized.append(AIMessage(**msg_dict))
-            else:
-                deserialized.append(BaseMessage(**msg_dict))
-        except Exception as e:
-            logging.error(f"Error deserializing message dict {msg_dict}: {e}")
-    return deserialized
-
-def serialize_datetime(dt: datetime | str | None) -> str | None:
-    if dt is None:
-        return None
-    if isinstance(dt, str):
-        return dt
-    return dt.isoformat()
-
-def deserialize_datetime(dt_str: str | datetime | None) -> datetime | None:
-    if dt_str is None:
-        return None
-    if isinstance(dt_str, datetime):
-        return dt_str
+# -------------------------------------------------
+# App Lifespan
+# -------------------------------------------------
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logging.info("Starting lifespan startup...")
+    await init_pool()
+    await init_db()
+    monitor_task = asyncio.create_task(monitor_active_leads())
+    logging.info("Finished lifespan startup.")
+    yield
+    logging.info("Starting lifespan shutdown...")
+    monitor_task.cancel()
     try:
-        return datetime.fromisoformat(dt_str)
-    except Exception as e:
-        logging.error(f"Error parsing datetime string {dt_str}: {e}")
-        return None
+        await monitor_task
+    except asyncio.CancelledError:
+        logging.info("Monitor task stopped.")
+    await close_pool()
+    logging.info("Finished lifespan shutdown.")
 
 
-# --- State Management Helpers ---
+# -------------------------------------------------
+# FastAPI App
+# -------------------------------------------------
+app = FastAPI(lifespan=lifespan)
 
-async def get_or_create_state(sender: str, username: str, mobile_number: str):
-    state = await hybrid_session_store.get_state(sender)
 
-    if not state:
-        # New state
-        state = {
-            "messages": [],
-            "mobile_number": mobile_number,
-            "username": username,
-            "conversation_summary": None,
-            "last_db_save_time": serialize_datetime(datetime.now(timezone.utc)),
-            "state_changed": False,
-            "sentiment_label": None,
-            "sentiment_score": None,
-        }
-    else:
-        # Deserialize messages & datetime
-        if "messages" in state:
-            state["messages"] = deserialize_messages(state["messages"])
-        state["last_db_save_time"] = deserialize_datetime(state.get("last_db_save_time"))
-        # Update info if reconnected
-        state["mobile_number"] = mobile_number
-        state["username"] = username
+# -------------------------------------------------
+# Middleware
+# -------------------------------------------------
 
-    # Save immediately to keep data consistent (serialized)
-    await hybrid_session_store.save_state(sender, {
-        **state,
-        "messages": serialize_messages(state["messages"]),
-        "last_db_save_time": serialize_datetime(state["last_db_save_time"])
-    })
-    return state
+# 🔐 Session Middleware (LOGIN STATE)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key="SUPER_SECRET_CHANGE_THIS",   # ⚠️ use env var in prod
+    session_cookie="session",
+    max_age=60 * 60,                         # 1 hour
+    same_site="lax",
+    https_only=False                         # True in production
+)
 
-async def save_state(sender: str, state: dict):
-    # Serialize before saving
-    state_to_save = {
-        **state,
-        "messages": serialize_messages(state.get("messages", [])),
-        "last_db_save_time": serialize_datetime(state.get("last_db_save_time"))
+# 🌍 CORS Middleware (needed only if JS frontend exists)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:8000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# -------------------------------------------------
+# Helpers
+# -------------------------------------------------
+async def get_or_create_state(
+    username: str,
+    user_mobile_number: str,
+    client_mobile_number: str,
+):
+    return {
+        "messages": [],
+        "user_mobile_number": user_mobile_number,
+        "client_mobile_number": client_mobile_number,
+        "username": username,
     }
-    await hybrid_session_store.save_state(sender, state_to_save)
 
 
-# --- FastAPI WhatsApp Webhook ---
+# -------------------------------------------------
+# WhatsApp Routes
+# -------------------------------------------------
+@app.get("/go")
+def redirect_to_whatsapp():
+    number = TWILIO_WHATSAPP_NUMBER.replace("whatsapp:", "").replace("+", "")
+    return RedirectResponse(f"https://wa.me/{number}")
+
 
 @app.post("/whatsapp")
 async def whatsapp_webhook(
+    To: str = Form(...),
     From: str = Form(...),
     Body: str = Form(...),
     ProfileName: str = Form(None),
 ):
-    sender = From
-    username = ProfileName or "Unknown"
-    mobile_number = sender.replace("whatsapp:", "")
+    business_number = To.replace("whatsapp:", "")
+    user_number = From.replace("whatsapp:", "")
+    username = ProfileName or "User"
     user_message = Body.strip()
 
     try:
-        # 1) Load or create state
-        state = await get_or_create_state(sender, username, mobile_number)
+        await LeadService.capture_initial_contact(
+            client=business_number,
+            user_mobile=user_number,
+            username=username,
+        )
+    except Exception as e:
+        logging.error(f"Lead capture failed: {e}")
 
-        # 2) Append user message
-        state["messages"].append(HumanMessage(content=f"[User: {username} | Mobile: {mobile_number}] {user_message}"))
-        state["state_changed"] = True
+    try:
+        state = await get_or_create_state(username, user_number, business_number)
 
-        # 3) Run agent
-        config = {"configurable": {"thread_id": str(uuid.uuid4())},
-                  "tools": [] }
+        state["messages"].append(
+            HumanMessage(
+                content=f"[User: {username} | Mobile: {user_number}] {user_message}"
+            )
+        )
 
         if hasattr(agent, "ainvoke"):
-            result = await agent.ainvoke(state, config)
+            result = await agent.ainvoke(state)
         else:
-            result = await asyncio.to_thread(agent.invoke, state, config)
+            result = await asyncio.to_thread(agent.invoke, state)
 
         ai_reply = result["messages"][-1].content
         state["messages"].append(AIMessage(content=ai_reply))
-        state["state_changed"] = True
 
-        # 4) Periodic DB save (every 12 hours)
-        now = datetime.now(timezone.utc)
-        last_save = state.get("last_db_save_time") or now
-        if isinstance(last_save, str):
-            last_save = deserialize_datetime(last_save)
-
-        if state["state_changed"] and (now - last_save) > timedelta(hours=12):
-            summary = await summarize_conversation(state["messages"])
-            state["conversation_summary"] = summary
-
-            await save_to_db_and_clear_cache(state)
-
-            state["last_db_save_time"] = now
-            state["state_changed"] = False
-            logging.info(f"[Scheduled Save] Saved summary to DB for {mobile_number}")
-
-            # Clear full state from Redis after save
-            await hybrid_session_store.delete_state(sender)
-        else:
-            # Save updated state back to Redis
-            await save_state(sender, state)
-
-        # 5) Respond to WhatsApp
         resp = MessagingResponse()
         resp.message(ai_reply)
-        return PlainTextResponse(str(resp), media_type="application/xml")
+
+        return PlainTextResponse(
+            str(resp),
+            media_type="application/xml",
+        )
 
     except Exception as e:
-        logging.error(f"Error in whatsapp_webhook: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal Server Error")
+        logging.error(f"WhatsApp webhook error: {e}", exc_info=True)
+        resp = MessagingResponse()
+        resp.message("Sorry, something went wrong.")
+        return PlainTextResponse(str(resp), media_type="application/xml")
+
+
+# -------------------------------------------------
+# Website Routes
+# -------------------------------------------------
+@app.get("/home", response_class=HTMLResponse)
+async def welcome_page(request: Request):
+    return templates.TemplateResponse(
+        "landingpage.html",
+        {"request": request},
+    )
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    return templates.TemplateResponse(
+        "login.html",
+        {"request": request},
+    )
+
+
+@app.post("/login")
+async def login_route(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+):
+    user = await authenticate_user(username, password)
+
+    request.session["user"] = {
+        "user_id": user["id"],
+        "username": user["username"],
+    }
+
+    return RedirectResponse(
+        url="/login/dashboard",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@app.get("/signup", response_class=HTMLResponse)
+async def signup_page(request: Request):
+    return templates.TemplateResponse(
+        "signup.html",
+        {"request": request},
+    )
+
+
+@app.post("/signup")
+async def handle_signup(
+    background_tasks: BackgroundTasks,
+    phone: str = Form(...),
+    password: str = Form(...),
+    url: str = Form(...),
+    location: str = Form(...),
+):
+    try:
+        await register_new_customer(
+            phone,
+            password,
+            url,
+            location,
+            background_tasks,
+        )
+    except Exception as e:
+        logging.error(f"Signup error: {e}")
+
+    return HTMLResponse(
+        content="<h1>Success!</h1><a href='/login'>Login</a>"
+    )
+
+
+@app.get("/login/dashboard", response_class=HTMLResponse)
+async def dashboard(request: Request):
+    # 1. Check Auth
+    auth_redirect = login_required(request)
+    if auth_redirect:
+        return auth_redirect
+
+    # 2. If we get here, the user IS logged in.
+    # You can access their data from the session:
+    user_data = request.session.get("user")
+    username = user_data.get("username")
+
+    # 3. Fetch data for the dashboard
+    logging.info(f"Fetching dashboard for {username}...")
+    leads = await fetch_all_leads(str(username))
+    print(leads)
+
+    # 4. Render the page
+    return templates.TemplateResponse(
+        "dashboard.html", 
+        {
+            "request": request, 
+            "leads": leads, 
+            "username": username
+        }
+    )
+
+
+@app.get("/logout")
+async def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse(
+        url="/login",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )

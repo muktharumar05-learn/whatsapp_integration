@@ -9,7 +9,11 @@
         "libpq",
         "psycopg",
         "TIMESTAMPTZ",
+        "twiml",
         "Uvicorn",
         "yourdbname"
+    ],
+    "python.analysis.extraPaths": [
+        "./database"
     ]
 }

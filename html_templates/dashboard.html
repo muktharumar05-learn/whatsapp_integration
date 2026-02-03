@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Leads Dashboard</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: #f0f2f5;
+      margin: 30px;
+      color: #333;
+    }
+    h1 {
+      text-align: center;
+      color: #2c3e50;
+      margin-bottom: 20px;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      background: white;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    thead {
+      background: linear-gradient(90deg, #4b79a1, #283e51);
+      color: white;
+      user-select: none;
+    }
+    th, td {
+      padding: 12px 15px;
+      border-bottom: 1px solid #ddd;
+      text-align: left;
+      cursor: default;
+    }
+    th {
+      cursor: pointer;
+      position: relative;
+      transition: background-color 0.3s ease;
+    }
+    th:hover {
+      background-color: #3a5970;
+    }
+    tbody tr:hover {
+      background-color: #f9f9f9;
+    }
+    /* Sentiment color coding */
+    .sentiment-positive {
+      background-color: #d4edda;
+      color: #155724;
+      font-weight: 600;
+    }
+    .sentiment-negative {
+      background-color: #f8d7da;
+      color: #721c24;
+      font-weight: 600;
+    }
+    .sentiment-neutral {
+      background-color: #fff3cd;
+      color: #856404;
+      font-weight: 600;
+    }
+
+    /* Sort indicator */
+    th.sort-asc::after {
+      content: "▲";
+      position: absolute;
+      right: 10px;
+      font-size: 0.7em;
+    }
+    th.sort-desc::after {
+      content: "▼";
+      position: absolute;
+      right: 10px;
+      font-size: 0.7em;
+    }
+  </style>
+</head>
+<body>
+  <h1>Leads Dashboard for {{ username }}</h1>
+  <table id="leadsTable">
+    <thead>
+      <tr>
+        <th data-type="string">Mobile Number</th>
+        <th data-type="string">Username</th>
+        <th data-type="string">Summary</th>
+        <th data-type="string">Sentiment</th>
+        <th data-type="number">Sentiment Score</th>
+        <th data-type="date">Last Active</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% if leads %}
+        {% for lead in leads %}
+        <tr>
+          <td>{{ lead[1] }}</td> <td>{{ lead[2] }}</td> <td>{{ lead[3] }}</td> <td>{{ lead[4] }}</td> <td>{{ lead[5] }}</td> <td>
+            {% if lead[6] %}
+              {{ lead[6].strftime('%Y-%m-%d %H:%M') }}
+            {% else %}
+              N/A
+            {% endif %}
+          </td> </tr>
+        {% endfor %}
+      {% else %}
+        <tr>
+          <td colspan="6" style="text-align: center;">No leads found.</td>
+        </tr>
+      {% endif %}
+    </tbody>
+  </table>
+
+  <script>
+    function applySentimentClasses() {
+      const tbody = document.querySelector('#leadsTable tbody');
+      if (!tbody) return;
+      [...tbody.rows].forEach(row => {
+        const sentimentCell = row.cells[3]; 
+        if (!sentimentCell) return;
+        
+        const sentiment = sentimentCell.textContent.trim().toLowerCase();
+        row.classList.remove('sentiment-positive', 'sentiment-negative', 'sentiment-neutral');
+        
+        if (sentiment === 'positive') {
+          row.classList.add('sentiment-positive');
+        } else if (sentiment === 'negative') {
+          row.classList.add('sentiment-negative');
+        } else if (sentiment !== 'no leads found.') {
+          row.classList.add('sentiment-neutral');
+        }
+      });
+    }
+
+    document.querySelectorAll('#leadsTable thead th').forEach(header => {
+      header.addEventListener('click', () => {
+        const table = header.closest('table');
+        const tbody = table.querySelector('tbody');
+        const index = [...header.parentElement.children].indexOf(header);
+        const type = header.getAttribute('data-type');
+        const currentIsAsc = header.classList.contains('sort-asc');
+
+        table.querySelectorAll('th').forEach(th => th.classList.remove('sort-asc', 'sort-desc'));
+
+        header.classList.toggle('sort-asc', !currentIsAsc);
+        header.classList.toggle('sort-desc', currentIsAsc);
+
+        const direction = currentIsAsc ? -1 : 1;
+        const rows = Array.from(tbody.querySelectorAll('tr'));
+
+        // Don't sort if there's only the "No leads found" row
+        if (rows.length <= 1 && rows[0].cells.length === 1) return;
+
+        rows.sort((a, b) => {
+          let aText = a.cells[index].textContent.trim();
+          let bText = b.cells[index].textContent.trim();
+
+          if (type === 'number') {
+            return direction * (parseFloat(aText) - parseFloat(bText));
+          } else if (type === 'date') {
+            return direction * (new Date(aText) - new Date(bText));
+          } else {
+            return direction * aText.localeCompare(bText);
+          }
+        });
+
+        rows.forEach(row => tbody.appendChild(row));
+        applySentimentClasses();
+      });
+    });
+
+    // Run once on page load
+    window.onload = applySentimentClasses;
+  </script>
+</body>
+</html>

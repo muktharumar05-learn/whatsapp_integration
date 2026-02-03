@@ -13,12 +13,20 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Install Playwright browsers
+RUN playwright install chromium --with-deps
+
 # Copy app source code
 COPY ./app ./app
 COPY ./agent ./agent
-COPY ./storage ./storage
+COPY ./client ./client
+COPY ./database ./database
+COPY ./html_templates ./html_templates
+COPY ./service ./service
 COPY ./prompts ./prompts
 COPY config.yaml .
+COPY ./scrape ./scrape
+COPY ./rag ./rag
 
 # Expose port (if you run on 8000)
 EXPOSE 8000
